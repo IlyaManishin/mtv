@@ -126,6 +126,15 @@ class TestParser(unittest.TestCase):
         self.assertGreater(len(result.errors), 0)
         self.assertIn("':'", result.errors[0].message)
 
+    def test_multiple_errors_found(self) -> None:
+        source = "if a\n    x =\nelse\n    z ="
+        tokens, _ = Lexer(source, file_path="multi.py").tokenize()
+        result = Parser(tokens, file_path="multi.py").parse()
+        self.assertFalse(result.is_valid)
+        self.assertEqual(len(result.errors), 4)
+        lines = [err.line for err in result.errors]
+        self.assertEqual(lines, [1, 2, 3, 4])
+
 
 class TestGui(unittest.TestCase):
     def setUp(self) -> None:
@@ -150,7 +159,7 @@ class TestGui(unittest.TestCase):
         self.window._on_run_analysis()
         self.assertEqual(self.window._output_panel._error_table.rowCount(), 0)
         log = self.window._output_panel._log_edit.toPlainText()
-        self.assertIn("Токенизация успешно выполнена", log)
+        self.assertIn("Лексический анализ", log)
         self.assertIn("успешно завершен", log)
 
     def test_error_navigation(self) -> None:

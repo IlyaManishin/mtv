@@ -3,6 +3,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence
 from PyQt6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QMenu,
     QMenuBar,
@@ -21,6 +22,7 @@ from src.common.constants import (
 )
 from src.common.localization import Language, get_text
 from src.compiler.lexer import Lexer
+from src.compiler.models import ErrorRecord
 from src.compiler.parser import Parser
 from src.gui.dialogs.about_dialog import AboutDialog
 from src.gui.dialogs.help_dialog import HelpDialog
@@ -398,11 +400,19 @@ class MainWindow(QMainWindow):
             curr.cut()
 
     def _on_copy(self) -> None:
+        focus_w = QApplication.focusWidget()
+        if focus_w is not None and hasattr(focus_w, "copy"):
+            focus_w.copy()
+            return
         curr = self._editor_tabs.current_editor()
         if curr is not None:
             curr.copy()
 
     def _on_paste(self) -> None:
+        focus_w = QApplication.focusWidget()
+        if focus_w is not None and hasattr(focus_w, "paste"):
+            focus_w.paste()
+            return
         curr = self._editor_tabs.current_editor()
         if curr is not None:
             curr.paste()
@@ -413,6 +423,10 @@ class MainWindow(QMainWindow):
             curr.textCursor().removeSelectedText()
 
     def _on_select_all(self) -> None:
+        focus_w = QApplication.focusWidget()
+        if focus_w is not None and hasattr(focus_w, "selectAll"):
+            focus_w.selectAll()
+            return
         curr = self._editor_tabs.current_editor()
         if curr is not None:
             curr.selectAll()
@@ -448,26 +462,35 @@ class MainWindow(QMainWindow):
         lexer = Lexer(code_text, file_path=path)
         tokens, lexical_errors = lexer.tokenize()
 
-        if lexical_errors:
-            logs = [
-                f"Лексический анализ: обнаружено ошибок: {len(lexical_errors)}.",
-                "Синтаксический анализ остановлен из-за лексических ошибок.",
-            ]
-            self._output_panel.set_log_messages(logs)
-            self._output_panel.set_errors(lexical_errors)
-            return
-
-        # Step 2: Syntactic analysis (Parser)
+        # Step 2: Syntactic analysis with Panic-Mode Error Recovery
         parser = Parser(tokens, file_path=path)
         result = parser.parse()
 
-        # Prepend token count info to log
-        result.log_messages.insert(
-            0, f"Токенизация успешно выполнена: распознано токенов: {len(tokens) - 1}."
-        )
+        # Combine all lexical and syntactic errors
+        combined_raw_errors = list(lexical_errors) + list(result.errors)
+        all_errors = [
+            ErrorRecord(
+                index=idx + 1,
+                file_path=err.file_path,
+                line=err.line,
+                column=err.column,
+                message=err.message,
+            )
+            for idx, err in enumerate(combined_raw_errors)
+        ]
 
-        self._output_panel.set_log_messages(result.log_messages)
-        self._output_panel.set_errors(result.errors)
+        token_count = max(0, len(tokens) - 1)
+        log_messages = [
+            f"Лексический анализ: токенов: {token_count}, лексических ошибок: {len(lexical_errors)}.",
+            f"Синтаксический анализ: синтаксических ошибок: {len(result.errors)}.",
+        ]
+        if all_errors:
+            log_messages.append(f"Всего ошибок найдено: {len(all_errors)} шт.")
+        else:
+            log_messages.append("Синтаксический анализ успешно завершен. Ошибок не обнаружено.")
+
+        self._output_panel.set_log_messages(log_messages)
+        self._output_panel.set_errors(all_errors)
 
     def _on_error_selected(self, line: int, col: int) -> None:
         curr = self._editor_tabs.current_editor()

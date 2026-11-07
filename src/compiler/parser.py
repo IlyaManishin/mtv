@@ -15,7 +15,7 @@ class Parser:
         self._errors.clear()
         self._log.clear()
 
-        # Check if empty (only EOF token)
+        # Check for empty token stream (only EOF)
         if len(self._tokens) <= 1:
             self._log.append("Предупреждение: Входной поток токенов пуст.")
             return AnalysisResult(
@@ -27,10 +27,25 @@ class Parser:
 
         self._log.append(f"Запуск синтаксического анализатора (токенов: {len(self._tokens) - 1}).")
 
-        self._parse_statement()
+        # Parse statements until EOF using panic-mode recovery
+        while self._current_token().type != TokenType.EOF:
+            initial_cursor = self._cursor
+            self._parse_statement()
+
+            # Prevent potential infinite loops if a rule fails to advance cursor
+            if self._cursor == initial_cursor:
+                tok = self._current_token()
+                if tok.type != TokenType.EOF:
+                    self._record_error(
+                        tok,
+                        f"Неожиданный токен вне оператора: '{tok.value}'. Пропуск токена.",
+                    )
+                    self._cursor += 1
 
         if self._errors:
-            self._log.append(f"Синтаксический анализ завершен с ошибками: {len(self._errors)} шт.")
+            self._log.append(
+                f"Синтаксический анализ завершен с ошибками: обнаружено {len(self._errors)} шт."
+            )
             return AnalysisResult(
                 is_valid=False,
                 log_messages=self._log,
@@ -51,128 +66,229 @@ class Parser:
             return self._tokens[self._cursor]
         return self._tokens[-1]
 
-    def _expect(self, expected_type: TokenType, description: str) -> bool:
+    def _advance(self) -> Token:
         tok = self._current_token()
-        if tok.type == expected_type:
+        if self._cursor < len(self._tokens):
             self._cursor += 1
-            return True
+        return tok
 
-        found_str = f"'{tok.value}'" if tok.value else "конец файла"
+    @staticmethod
+    def _format_tok(tok: Token) -> str:
+        if tok.type == TokenType.EOF:
+            return "конец файла"
+        if tok.type == TokenType.TERM_NEWLINE:
+            return "перевод строки"
+        if tok.type == TokenType.TERM_INDENT:
+            return "отступ"
+        if tok.type == TokenType.TERM_DEDENT:
+            return "возврат отступа"
+        return f"'{tok.value}'"
+
+    def _record_error(self, tok: Token, message: str) -> None:
         self._errors.append(
             ErrorRecord(
                 index=len(self._errors) + 1,
                 file_path=self._file_path,
                 line=tok.line,
                 column=tok.column,
-                message=f"Ожидалось: {description}, но получено: {found_str}",
+                message=message,
             )
         )
-        return False
+
+    def _skip_until(self, sync_types: set[TokenType]) -> None:
+        # Panic mode: consume tokens until a synchronizing token or EOF is found
+        while self._current_token().type not in sync_types and self._current_token().type != TokenType.EOF:
+            self._cursor += 1
 
     def _parse_statement(self) -> None:
+        # Expected grammar:
         # <IfStmt> -> 'if' <Condition> ':' 'NEWLINE' 'INDENT' <Assignment> 'NEWLINE' 'DEDENT'
         #             'else' ':' 'NEWLINE' 'INDENT' <Assignment> 'NEWLINE' 'DEDENT'
-        if not self._expect(TokenType.KEYWORD_IF, "'if'"):
-            return
 
-        if not self._parse_condition():
-            return
-
-        if not self._expect(TokenType.COLON, "':' после условия"):
-            return
-
-        if not self._expect(TokenType.TERM_NEWLINE, "'NEWLINE' после ':'"):
-            return
-
-        if not self._expect(TokenType.TERM_INDENT, "'INDENT' в начале блока if"):
-            return
-
-        if not self._parse_assignment():
-            return
-
-        if not self._expect(TokenType.TERM_NEWLINE, "'NEWLINE' после присваивания"):
-            return
-
-        if not self._expect(TokenType.TERM_DEDENT, "'DEDENT' в конце блока if"):
-            return
-
-        if not self._expect(TokenType.KEYWORD_ELSE, "'else'"):
-            return
-
-        if not self._expect(TokenType.COLON, "':' после 'else'"):
-            return
-
-        if not self._expect(TokenType.TERM_NEWLINE, "'NEWLINE' после 'else:'"):
-            return
-
-        if not self._expect(TokenType.TERM_INDENT, "'INDENT' в начале блока else"):
-            return
-
-        if not self._parse_assignment():
-            return
-
-        if not self._expect(TokenType.TERM_NEWLINE, "'NEWLINE' после присваивания в else"):
-            return
-
-        if not self._expect(TokenType.TERM_DEDENT, "'DEDENT' в конце блока else"):
-            return
-
-        tok = self._current_token()
-        if tok.type != TokenType.EOF:
-            self._errors.append(
-                ErrorRecord(
-                    index=len(self._errors) + 1,
-                    file_path=self._file_path,
-                    line=tok.line,
-                    column=tok.column,
-                    message=f"Лишние символы после оператора: '{tok.value}'",
-                )
+        # 1. 'if'
+        if self._current_token().type == TokenType.KEYWORD_IF:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(
+                tok,
+                f"Ожидалось ключевое слово 'if' в начале условного оператора, получено {self._format_tok(tok)}",
             )
+            self._skip_until({TokenType.KEYWORD_IF, TokenType.KEYWORD_ELSE, TokenType.EOF})
+            if self._current_token().type != TokenType.KEYWORD_IF:
+                return
+            self._advance()
 
-    def _parse_condition(self) -> bool:
+        # 2. <Condition>
+        self._parse_condition()
+
+        # 3. ':' after condition
+        if self._current_token().type == TokenType.COLON:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Пропущено двоеточие ':' после условия")
+            if self._current_token().type not in (TokenType.TERM_NEWLINE, TokenType.TERM_INDENT):
+                self._skip_until({TokenType.TERM_NEWLINE, TokenType.TERM_INDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
+
+        # 4. 'NEWLINE' after 'if:'
+        if self._current_token().type == TokenType.TERM_NEWLINE:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался перевод строки после заголовка 'if:'")
+            if self._current_token().type != TokenType.TERM_INDENT:
+                self._skip_until({TokenType.TERM_INDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
+
+        # 5. 'INDENT' before 'if' body
+        if self._current_token().type == TokenType.TERM_INDENT:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался отступ (блок команд) после 'if:'")
+
+        # 6. <Assignment> in 'if' branch
+        self._parse_assignment(context="в блоке 'if'")
+
+        # 7. 'NEWLINE' after assignment in 'if'
+        if self._current_token().type == TokenType.TERM_NEWLINE:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался перевод строки после выражения в блоке 'if'")
+            if self._current_token().type not in (TokenType.TERM_DEDENT, TokenType.KEYWORD_ELSE):
+                self._skip_until({TokenType.TERM_DEDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
+
+        # 8. 'DEDENT' ending 'if' block
+        if self._current_token().type == TokenType.TERM_DEDENT:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался возврат отступа (конец блока 'if')")
+            if self._current_token().type != TokenType.KEYWORD_ELSE:
+                self._skip_until({TokenType.KEYWORD_ELSE, TokenType.EOF})
+
+        # 9. 'else'
+        if self._current_token().type == TokenType.KEYWORD_ELSE:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, f"Ожидалась ветка 'else:', получено {self._format_tok(tok)}")
+            if self._current_token().type not in (TokenType.COLON, TokenType.TERM_NEWLINE, TokenType.TERM_INDENT):
+                self._skip_until({TokenType.KEYWORD_IF, TokenType.EOF})
+                return
+
+        # 10. ':' after 'else'
+        if self._current_token().type == TokenType.COLON:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Пропущено двоеточие ':' после 'else'")
+            if self._current_token().type not in (TokenType.TERM_NEWLINE, TokenType.TERM_INDENT):
+                self._skip_until({TokenType.TERM_NEWLINE, TokenType.TERM_INDENT, TokenType.EOF})
+
+        # 11. 'NEWLINE' after 'else:'
+        if self._current_token().type == TokenType.TERM_NEWLINE:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался перевод строки после 'else:'")
+            if self._current_token().type != TokenType.TERM_INDENT:
+                self._skip_until({TokenType.TERM_INDENT, TokenType.EOF})
+
+        # 12. 'INDENT' before 'else' body
+        if self._current_token().type == TokenType.TERM_INDENT:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался отступ (блок команд) после 'else:'")
+
+        # 13. <Assignment> in 'else' branch
+        self._parse_assignment(context="в блоке 'else'")
+
+        # 14. 'NEWLINE' after assignment in 'else'
+        if self._current_token().type == TokenType.TERM_NEWLINE:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался перевод строки после выражения в блоке 'else'")
+            if self._current_token().type != TokenType.TERM_DEDENT:
+                self._skip_until({TokenType.TERM_DEDENT, TokenType.EOF})
+
+        # 15. 'DEDENT' ending 'else' block
+        if self._current_token().type == TokenType.TERM_DEDENT:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, "Ожидался возврат отступа (конец блока 'else')")
+
+    def _parse_condition(self) -> None:
         # <Condition> -> <Condition> "or" <Condition> | <Condition> "and" <Condition> | <ident>
-        if not self._parse_primary_condition():
-            return False
+        tok = self._current_token()
+        if tok.type in (TokenType.COLON, TokenType.TERM_NEWLINE, TokenType.TERM_INDENT, TokenType.EOF):
+            self._record_error(tok, "Ожидалось логическое условие после 'if'")
+            return
+
+        self._parse_primary_condition()
 
         while self._current_token().type in (TokenType.KEYWORD_AND, TokenType.KEYWORD_OR):
-            self._cursor += 1
-            if not self._parse_primary_condition():
-                return False
+            op_tok = self._advance()
+            next_tok = self._current_token()
+            if next_tok.type in (TokenType.COLON, TokenType.TERM_NEWLINE, TokenType.EOF):
+                self._record_error(next_tok, f"Ожидался операнд после логического оператора '{op_tok.value}'")
+                break
+            self._parse_primary_condition()
 
-        return True
-
-    def _parse_primary_condition(self) -> bool:
+    def _parse_primary_condition(self) -> None:
         tok = self._current_token()
         if tok.type == TokenType.LPAREN:
-            self._cursor += 1
-            if not self._parse_condition():
-                return False
-            return self._expect(TokenType.RPAREN, "')' закрывающая скобка условия")
-
-        if tok.type == TokenType.IDENTIFIER:
-            self._cursor += 1
-            return True
-
-        self._errors.append(
-            ErrorRecord(
-                index=len(self._errors) + 1,
-                file_path=self._file_path,
-                line=tok.line,
-                column=tok.column,
-                message=f"Ожидался идентификатор в условии, получено: '{tok.value}'",
+            self._advance()
+            self._parse_condition()
+            if self._current_token().type == TokenType.RPAREN:
+                self._advance()
+            else:
+                self._record_error(self._current_token(), "Ожидалась закрывающая скобка ')' в условии")
+        elif tok.type == TokenType.IDENTIFIER:
+            self._advance()
+        else:
+            self._record_error(
+                tok,
+                f"Некорректное условие: ожидался идентификатор, получено {self._format_tok(tok)}",
             )
-        )
-        return False
+            self._skip_until({TokenType.COLON, TokenType.KEYWORD_AND, TokenType.KEYWORD_OR, TokenType.TERM_NEWLINE, TokenType.EOF})
 
-    def _parse_assignment(self) -> bool:
+    def _parse_assignment(self, context: str) -> None:
         # <Assignment> -> <ident> '=' <ident>
-        if not self._expect(TokenType.IDENTIFIER, "идентификатор слева от '='"):
-            return False
+        # Left side identifier
+        tok = self._current_token()
+        if tok.type == TokenType.IDENTIFIER:
+            self._advance()
+        elif tok.type == TokenType.ASSIGN:
+            self._record_error(tok, f"Пропущен идентификатор слева от '=' {context}")
+        else:
+            self._record_error(
+                tok,
+                f"Ожидался идентификатор слева от '=' {context}, получено {self._format_tok(tok)}",
+            )
+            if self._current_token().type != TokenType.ASSIGN:
+                self._skip_until({TokenType.ASSIGN, TokenType.TERM_NEWLINE, TokenType.TERM_DEDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
 
-        if not self._expect(TokenType.ASSIGN, "'=' в присваивании"):
-            return False
+        # Equals sign '='
+        if self._current_token().type == TokenType.ASSIGN:
+            self._advance()
+        else:
+            tok = self._current_token()
+            self._record_error(tok, f"Ожидался знак '=' в присваивании {context}, получено {self._format_tok(tok)}")
+            if self._current_token().type != TokenType.IDENTIFIER:
+                self._skip_until({TokenType.IDENTIFIER, TokenType.TERM_NEWLINE, TokenType.TERM_DEDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
 
-        if not self._expect(TokenType.IDENTIFIER, "идентификатор справа от '='"):
-            return False
-
-        return True
+        # Right side identifier
+        tok = self._current_token()
+        if tok.type == TokenType.IDENTIFIER:
+            self._advance()
+        else:
+            self._record_error(
+                tok,
+                f"Ожидался идентификатор справа от '=' {context}, получено {self._format_tok(tok)}",
+            )
+            self._skip_until({TokenType.TERM_NEWLINE, TokenType.TERM_DEDENT, TokenType.KEYWORD_ELSE, TokenType.EOF})
