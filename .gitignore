@@ -1,5 +1,5 @@
 docs/** 
-AGENTS.md
+agents.md
 .venv/
 __pycache__/
 *.pyc
