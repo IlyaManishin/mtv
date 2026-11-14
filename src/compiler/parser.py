@@ -239,6 +239,15 @@ class Parser:
                 break
             self._parse_primary_condition()
 
+    COMPARISON_OPS = (
+        TokenType.OP_LT,
+        TokenType.OP_GT,
+        TokenType.OP_LE,
+        TokenType.OP_GE,
+        TokenType.OP_EQ,
+        TokenType.OP_NE,
+    )
+
     def _parse_primary_condition(self) -> None:
         tok = self._current_token()
         if tok.type == TokenType.LPAREN:
@@ -248,8 +257,24 @@ class Parser:
                 self._advance()
             else:
                 self._record_error(self._current_token(), "Ожидалась закрывающая скобка ')' в условии")
+        elif tok.type in self.COMPARISON_OPS:
+            op_tok = self._advance()
+            self._record_error(op_tok, f"Пропущен левый операнд перед оператором сравнения '{op_tok.value}'")
+            if self._current_token().type == TokenType.IDENTIFIER:
+                self._advance()
         elif tok.type == TokenType.IDENTIFIER:
             self._advance()
+            # Check for comparison operator: <ident> <Op> <ident>
+            if self._current_token().type in self.COMPARISON_OPS:
+                op_tok = self._advance()
+                right_tok = self._current_token()
+                if right_tok.type == TokenType.IDENTIFIER:
+                    self._advance()
+                else:
+                    self._record_error(
+                        right_tok,
+                        f"Ожидался идентификатор справа от оператора сравнения '{op_tok.value}', получено {self._format_tok(right_tok)}",
+                    )
         else:
             self._record_error(
                 tok,

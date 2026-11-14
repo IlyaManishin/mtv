@@ -39,7 +39,7 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         # Operators and punctuation
         operator_format = QTextCharFormat()
         operator_format.setForeground(QColor("#795E26"))
-        self._rules.append(HighlightingRule(QRegularExpression("[:=+\\-*/()]"), operator_format))
+        self._rules.append(HighlightingRule(QRegularExpression(r"(<=|>=|==|!=|[-:=+*/()<>]|!)"), operator_format))
 
         # Comments
         comment_format = QTextCharFormat()

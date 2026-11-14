@@ -135,6 +135,29 @@ class TestParser(unittest.TestCase):
         lines = [err.line for err in result.errors]
         self.assertEqual(lines, [1, 2, 3, 4])
 
+    def test_comparison_operators(self) -> None:
+        ops = ["<", ">", "<=", ">=", "==", "!="]
+        for op in ops:
+            source = f"if a {op} b:\n    x = y\nelse:\n    z = w\n"
+            tokens, lex_errors = Lexer(source, file_path=f"comp_{op}.py").tokenize()
+            self.assertEqual(len(lex_errors), 0, f"Lexer error for op {op}")
+            result = Parser(tokens, file_path=f"comp_{op}.py").parse()
+            self.assertTrue(result.is_valid, f"Parser error for op {op}: {result.errors}")
+
+    def test_compound_comparison_conditions(self) -> None:
+        source = "if a < b and c >= d or (e != f and g == h):\n    x = y\nelse:\n    z = w\n"
+        tokens, lex_errors = Lexer(source, file_path="compound_comp.py").tokenize()
+        self.assertEqual(len(lex_errors), 0)
+        result = Parser(tokens, file_path="compound_comp.py").parse()
+        self.assertTrue(result.is_valid, f"Parser error: {result.errors}")
+
+    def test_comparison_missing_right_operand(self) -> None:
+        source = "if a < :\n    x = y\nelse:\n    z = w\n"
+        tokens, _ = Lexer(source, file_path="missing_operand.py").tokenize()
+        result = Parser(tokens, file_path="missing_operand.py").parse()
+        self.assertFalse(result.is_valid)
+        self.assertTrue(any("Ожидался идентификатор справа" in err.message for err in result.errors))
+
 
 class TestGui(unittest.TestCase):
     def setUp(self) -> None:

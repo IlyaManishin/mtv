@@ -1,7 +1,7 @@
 ; Grammar G = (VN, VT, P, <if_stmt>)
 ;
-; VN = { <if_stmt>, <condition>, <logical_term>, <primary_cond>, <assignment>, <ident> }
-; VT = { "if", "else", "and", "or", ":", "=", "(", ")", NEWLINE, INDENT, DEDENT, <ident> }
+; VN = { <if_stmt>, <condition>, <logical_term>, <primary_cond>, <comparison>, <Op>, <assignment>, <ident> }
+; VT = { "if", "else", "and", "or", ":", "=", "(", ")", "<", ">", "<=", ">=", "==", "!=", NEWLINE, INDENT, DEDENT, <ident> }
 
 <if_stmt>       ::= "if" <condition> ":" NEWLINE INDENT <assignment> NEWLINE DEDENT "else" ":" NEWLINE INDENT <assignment> NEWLINE DEDENT
 
@@ -12,7 +12,12 @@
                   | <primary_cond>
 
 <primary_cond>  ::= "(" <condition> ")"
+                  | <comparison>
                   | <ident>
+
+<comparison>    ::= <ident> <Op> <ident>
+
+<Op>            ::= "<" | ">" | "<=" | ">=" | "==" | "!="
 
 <assignment>    ::= <ident> "=" <ident>
 
